@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     charts = stats.generate_charts(stats_result)
 
     # 5. 价格
-    price_df = price_fetcher.fetch_price()
+    price_df = price_fetcher.fetch_price(keyword)
 
     # 6. 报告
     report_path = reporter.generate_report(keyword, df, stats_result, charts, price_df)

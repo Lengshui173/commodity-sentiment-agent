@@ -44,35 +44,67 @@ def _extract_close(data) -> pd.DataFrame | None:
     return df.sort_values("date").reset_index(drop=True)
 
 
-def _generate_mock_price() -> pd.DataFrame:
-    """生成过去 7 天的模拟原油价格（仅交易日，98-108 区间波动）。"""
+def _resolve_ticker(keyword: str) -> str:
+    """根据商品关键词映射到对应的 yfinance 期货代码。"""
+    kw = keyword.lower()
+    if "原油" in keyword or "oil" in kw or "crude" in kw:
+        return "CL=F"   # WTI 原油
+    if "黄金" in keyword or "gold" in kw:
+        return "GC=F"   # COMEX 黄金
+    if "白银" in keyword or "silver" in kw:
+        return "SI=F"   # COMEX 白银
+    if "铜" in keyword or "copper" in kw:
+        return "HG=F"   # COMEX 铜
+    return "CL=F"  # 无法识别时默认原油
+
+
+def _mock_price_range(keyword: str) -> tuple[float, float]:
+    """返回不同商品的模拟价格区间 (低, 高)。"""
+    kw = keyword.lower()
+    if "黄金" in keyword or "gold" in kw:
+        return (4300.0, 4400.0)
+    if "白银" in keyword or "silver" in kw:
+        return (30.0, 35.0)
+    if "铜" in keyword or "copper" in kw:
+        return (4.0, 4.8)
+    return (98.0, 108.0)  # 默认原油
+
+
+def _generate_mock_price(keyword: str = "原油") -> pd.DataFrame:
+    """生成过去 7 天的模拟价格（仅交易日，区间随商品变化）。"""
+    lo, hi = _mock_price_range(keyword)
     today = datetime.now(timezone.utc).date()
     all_days = [today - timedelta(days=i) for i in range(6, -1, -1)]  # 升序 7 个日历日
     dates = [d for d in all_days if d.weekday() < 5]  # 跳过周六(5)、周日(6)
-    # 模拟收盘价：98-108 区间内小幅波动，按交易日数量取对应条数
-    closes = [99.2, 100.6, 99.8, 102.1, 103.4, 101.9, 104.5][: len(dates)]
+    # 用固定波形在 [lo, hi] 区间内生成收盘价，带一点趋势
+    wave = [-0.4, 0.1, -0.25, 0.45, 0.8]
+    mid = (lo + hi) / 2
+    half = (hi - lo) / 2
+    closes = [round(mid + half * wave[i], 2) for i in range(len(dates))]
     return pd.DataFrame({
         "date": pd.to_datetime(dates),
         "close": [float(c) for c in closes],
     })
 
 
-def fetch_price(keyword: str = "CL=F", period: str = "7d") -> pd.DataFrame:
-    """拉取指定标的最近 N 天日线收盘价（代理优先 + 降级模拟）。
+def fetch_price(keyword: str = "原油", period: str = "7d") -> pd.DataFrame:
+    """拉取指定商品最近 N 天日线收盘价（代理优先 + 降级模拟）。
 
     Args:
-        keyword: yfinance 标的代码，默认 "CL=F"（WTI 原油期货）。
+        keyword: 商品关键词，默认 "原油"。
         period: 时间范围，默认 "7d"。
 
     Returns:
         含 date（datetime）、close（float）两列的 DataFrame，按日期升序。
     """
+    ticker = _resolve_ticker(keyword)
+
     # 设置代理环境变量（yfinance 在国内需走代理）
     os.environ["HTTP_PROXY"] = PROXY
     os.environ["HTTPS_PROXY"] = PROXY
 
     try:
-        data = yf.download(keyword, period=period, progress=False, auto_adjust=True)
+        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
     except Exception as e:
         print(f"[price_fetcher] 拉取真实价格失败：{e}")
         data = None
@@ -81,12 +113,12 @@ def fetch_price(keyword: str = "CL=F", period: str = "7d") -> pd.DataFrame:
     if df is not None and not df.empty:
         lo = round(float(df["close"].min()), 2)
         hi = round(float(df["close"].max()), 2)
-        print(f"[price_fetcher] 已获取 {len(df)} 条真实价格数据，价格范围 {lo}-{hi}")
+        print(f"[price_fetcher] 已获取 {len(df)} 条真实价格数据（{ticker}），价格范围 {lo}-{hi}")
         return df
 
     # 降级：请求失败或返回空数据 → 模拟数据
     print("[price_fetcher] 未获取到真实价格数据，已切换为模拟数据（7天）")
-    return _generate_mock_price()
+    return _generate_mock_price(keyword)
 
 
 if __name__ == "__main__":
